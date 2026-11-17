@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, initial-scale=1">
+  <title>Welcome</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="welcome.css">
+</head>
+<body>
+  <div id="stage">
+    <div id="bg"></div>
+    <div id="scrim"></div>
+
+    <main id="welcome" hidden>
+      <header class="top">
+        <div class="property" id="propertyName"></div>
+        <div class="clock"><span id="time"></span><span id="date"></span></div>
+      </header>
+
+      <section class="hero">
+        <div class="eyebrow" id="eyebrow">Welcome</div>
+        <h1 id="greeting">Welcome</h1>
+        <p class="message" id="message"></p>
+        <ul class="notes" id="notes"></ul>
+      </section>
+
+      <aside class="cards">
+        <div class="card wifi" id="wifiCard">
+          <div class="card-label">Wi-Fi</div>
+          <div class="wifi-row">
+            <div>
+              <div class="kv"><span>Network</span><strong id="wifiName"></strong></div>
+              <div class="kv"><span>Password</span><strong id="wifiPass"></strong></div>
+            </div>
+            <div class="qr" id="wifiQr"></div>
+          </div>
+          <div class="hint-small">Scan with your phone camera to join</div>
+        </div>
+        <div class="card-pair">
+          <div class="card" id="weatherCard">
+            <div class="card-label">Today</div>
+            <div class="big" id="temp"></div>
+            <div class="sub" id="weatherDesc"></div>
+          </div>
+          <div class="card" id="checkoutCard">
+            <div class="card-label">Checkout</div>
+            <div class="big" id="checkoutTime"></div>
+            <div class="sub" id="checkoutDate"></div>
+          </div>
+        </div>
+        <div class="card host" id="hostCard">
+          <div class="card-label">Need anything?</div>
+          <div class="sub"><strong id="hostName"></strong> <span id="hostPhone"></span></div>
+        </div>
+      </aside>
+
+      <footer class="footer">Press <b>Home</b> on the remote to start watching</footer>
+    </main>
+
+    <section id="setup" hidden>
+      <h2>Which TV is this?</h2>
+      <p>Use the arrow keys and press OK. You can come back here any time with the red button.</p>
+      <ul id="tvList"></ul>
+      <p class="setup-status" id="setupStatus"></p>
+    </section>
+
+    <div id="offline" hidden>Can't reach the welcome server. Showing the last saved screen.</div>
+  </div>
+
+  <script src="settings.js"></script>
+  <script src="vendor/qrcode.js"></script>
+  <script src="welcome.js"></script>
+</body>
+</html>

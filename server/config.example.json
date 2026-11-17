@@ -1,0 +1,62 @@
+{
+  "port": 8080,
+  "admin_password": "change-me",
+
+  "property": {
+    "name": "The Cedar House",
+    "host_name": "Rob",
+    "host_phone": "(555) 555-0123",
+    "timezone": "America/Denver",
+    "latitude": 39.74,
+    "longitude": -104.99,
+    "temperature_unit": "F",
+    "checkout_time": "11:00",
+    "wifi_name": "CedarHouse-Guest",
+    "wifi_password": "welcome2026",
+    "wifi_security": "WPA",
+    "message_no_guest": "Welcome to {property}!",
+    "background": "",
+    "house_notes": [
+      "Coffee and tea are in the cabinet left of the fridge",
+      "Hot tub cover clips are on the side facing the house",
+      "Please run the dishwasher before you leave"
+    ]
+  },
+
+  "tvs": {
+    "living-room": {
+      "label": "Living Room",
+      "message": "So glad you're here, {first_name}. Make yourself at home.",
+      "smartthings_device_id": ""
+    },
+    "primary-bedroom": {
+      "label": "Primary Bedroom",
+      "message": "Sleep well, {first_name}. Extra blankets are in the closet.",
+      "smartthings_device_id": ""
+    },
+    "bedroom-2": {
+      "label": "Bedroom 2",
+      "message": "Welcome, {first_name}! The streaming apps are all signed in, just press Home.",
+      "smartthings_device_id": ""
+    }
+  },
+
+  "smartthings": {
+    "app_id": "WlcmScrn01.Welcome",
+    "client_id": "",
+    "client_secret": "",
+    "redirect_uri": "https://httpbin.org/get",
+    "token": "",
+    "lock_device_id": "",
+    "launch_on_unlock": "first_per_stay",
+    "poll_seconds": 15
+  },
+
+  "gmail": {
+    "enabled": false,
+    "address": "you@gmail.com",
+    "app_password": "",
+    "poll_minutes": 15,
+    "days_back": 90
+  }
+}

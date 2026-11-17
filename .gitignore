@@ -1,0 +1,4 @@
+server/config.json
+server/data/
+build/
+__pycache__/
