@@ -32,19 +32,21 @@
   .actions { display:flex; gap:8px; flex-wrap:wrap; }
   #msg { min-height:24px; margin-top:8px; }
   .table-wrap { overflow-x:auto; }
+  a { color:var(--accent); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Welcome TV</h1>
-  <div class="muted">Guests shown on the TVs. Gmail imports appear here automatically if it's turned on.</div>
+  <div class="muted">Guests shown on the TVs. New Airbnb bookings appear here automatically. Add the guest's name and they're all set.</div>
+  <div class="muted" id="syncInfo" style="font-size:13px"></div>
 
   <h2>Right now</h2>
   <div class="card now">
     <div><div class="muted">The TVs are welcoming</div><strong id="nowName">—</strong></div>
     <div class="actions">
       <button id="launchBtn" class="primary">Turn on TVs and show welcome</button>
-      <button id="gmailBtn" hidden>Import from Gmail now</button>
+      <button id="syncBtn" hidden>Sync from Airbnb now</button>
       <a href="/?tv=" id="previewLink"><button type="button">Preview screen</button></a>
     </div>
   </div>
@@ -61,7 +63,7 @@
   <h2 id="formTitle">Add a stay</h2>
   <div class="card">
     <form id="form">
-      <input type="hidden" name="id">
+      <input type="hidden" name="rid">
       <label>Guest name<input name="guest_name" required placeholder="Sarah Johnson"></label>
       <label>Name on screen (optional)<input name="display_name" placeholder="Sarah &amp; Mike"></label>
       <label>Check-in<input name="checkin" type="date" required></label>
@@ -89,25 +91,26 @@ function say(t) { $("#msg").textContent = t; }
 async function load() {
   state = await api("/api/admin/reservations");
   const cur = state.reservations.find((r) => r.id === state.current);
-  $("#nowName").textContent = cur ? (cur.display_name || cur.guest_name) : "No guest checked in (generic welcome)";
-  $("#gmailBtn").hidden = !state.gmail_enabled;
+  $("#nowName").textContent = cur ? (cur.display_name || cur.guest_name || "A guest with no name yet (generic welcome)") : "No guest checked in (generic welcome)";
+  $("#syncBtn").hidden = !state.airbnb_sync_enabled;
+  $("#syncInfo").textContent = state.airbnb_sync_enabled ? "Last Airbnb sync: " + (state.airbnb_last_sync ? new Date(state.airbnb_last_sync).toLocaleString() : "not yet") : "";
   $("#launchBtn").disabled = !state.smartthings_enabled;
   if (!state.smartthings_enabled) $("#launchBtn").title = "Add SmartThings details to config.json";
   $("#previewLink").href = "/?tv=" + encodeURIComponent((state.tvs[0] || {}).id || "");
   const today = new Date().toISOString().slice(0, 10);
   $("#rows").innerHTML = state.reservations.filter((r) => r.checkout >= today || r.id === state.current).map((r) => `
     <tr class="${r.id === state.current ? "current" : ""}">
-      <td>${esc(r.display_name || r.guest_name)}${r.display_name ? `<div class="muted" style="font-size:13px">${esc(r.guest_name)}</div>` : ""}</td>
+      <td>${r.guest_name ? esc(r.display_name || r.guest_name) : '<span class="tag warn">Reserved – add name</span>'}${r.display_name && r.guest_name ? `<div class="muted" style="font-size:13px">${esc(r.guest_name)}</div>` : ""}${r.airbnb_url ? `<div style="font-size:13px"><a href="${esc(r.airbnb_url)}" target="_blank" rel="noopener">See booking on Airbnb</a>${r.phone_last4 ? ` <span class="muted">· phone ends ${esc(r.phone_last4)}</span>` : ""}</div>` : ""}</td>
       <td>${fmt(r.checkin)}</td><td>${fmt(r.checkout)}</td>
-      <td><span class="tag">${esc(r.source)}</span> ${r.needs_review ? '<span class="tag warn">check dates</span>' : ""}</td>
-      <td style="white-space:nowrap"><button class="link" data-edit="${r.id}">Edit</button><button class="link" data-del="${r.id}">Delete</button></td>
+      <td><span class="tag">${esc(r.source)}</span></td>
+      <td style="white-space:nowrap"><button class="link" data-edit="${r.id}">${r.guest_name ? "Edit" : "Add name"}</button><button class="link" data-del="${r.id}">Delete</button></td>
     </tr>`).join("") || `<tr><td colspan="5" class="muted">No upcoming stays.</td></tr>`;
   $("#tvMsgs").innerHTML = state.tvs.map((t) => `<label>${esc(t.label)}<input name="tvmsg_${esc(t.id)}"></label>`).join("");
 }
 
 function editForm(r) {
   const f = $("#form");
-  f.id.value = r?.id || "";
+  f.rid.value = r?.id || "";
   f.guest_name.value = r?.guest_name || "";
   f.display_name.value = r?.display_name || "";
   f.checkin.value = r?.checkin || "";
@@ -129,7 +132,7 @@ $("#form").onsubmit = async (e) => {
   const f = e.target, tv_messages = {};
   state.tvs.forEach((t) => { const v = f["tvmsg_" + t.id].value.trim(); if (v) tv_messages[t.id] = v; });
   try {
-    await api("/api/admin/reservations", { id: f.id.value || null, guest_name: f.guest_name.value.trim(),
+    await api("/api/admin/reservations", { id: f.rid.value || null, guest_name: f.guest_name.value.trim(),
       display_name: f.display_name.value.trim() || null, checkin: f.checkin.value, checkout: f.checkout.value, tv_messages });
     editForm(null); say("Saved."); load();
   } catch (err) { say("Couldn't save: " + err.message); }
@@ -138,10 +141,10 @@ $("#launchBtn").onclick = async () => {
   say("Turning on TVs… (takes about 10–30 seconds)");
   try { say((await api("/api/admin/launch", {})).results.join(" · ")); } catch (err) { say("Failed: " + err.message); }
 };
-$("#gmailBtn").onclick = async () => {
-  say("Checking Gmail…");
-  try { const r = await api("/api/admin/import-gmail", {}); say(`Gmail: ${r.added} added, ${r.updated} updated, ${r.removed} cancelled.`); load(); }
-  catch (err) { say("Gmail import failed: " + err.message); }
+$("#syncBtn").onclick = async () => {
+  say("Checking Airbnb…");
+  try { const r = await api("/api/admin/sync-airbnb", {}); say(`Airbnb: ${r.added} new, ${r.updated} changed, ${r.removed} cancelled.`); load(); }
+  catch (err) { say("Airbnb sync failed: " + err.message); }
 };
 load().catch((e) => say("Couldn't load: " + e.message));
 </script>

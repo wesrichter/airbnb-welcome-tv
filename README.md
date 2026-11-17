@@ -8,8 +8,8 @@ When a guest first unlocks the door, SmartThings turns all 3 TVs on and opens it
 **How it fits together**
 
 ```
- Airbnb confirmation emails ──► Welcome server ◄── you, on the admin page (add / fix guests)
-   (Gmail, optional)            (Raspberry Pi or any        │
+ Airbnb calendar link ────────► Welcome server ◄── you, on the admin page (add guest names)
+   (dates, every 30 min)        (Raspberry Pi or any        │
                                  always-on computer)        │ "door unlocked"
                                     │        ▲              │
                      guest name,    │        └── watches ── SmartThings lock
@@ -57,17 +57,24 @@ You need one always-on computer **on the Airbnb's network**. A Raspberry Pi is i
 
 > Keep the server on the local network only, and don't port-forward it to the internet. The welcome data includes the Wi-Fi password, which is fine on the house network but shouldn't be public.
 
-## 2. Getting guest names
+## 2. Bookings and guest names
 
-Airbnb's calendar export doesn't include names, so there are two options:
+The server copies your bookings from Airbnb's calendar link every 30 minutes. That link has each stay's dates and confirmation code but **not the guest's name**, so you add the name yourself. It takes about 10 seconds per booking.
 
-* **Manual:** add each stay on the admin page (about 20 seconds per booking). You can also set a display name like "Sarah & Mike" and override any TV's message for that stay, e.g. "Bunk beds are ready for the kids!".
-* **Automatic from Gmail:** the server reads your Airbnb "Reservation confirmed – *Name* arrives *Date*" emails and picks up the guest name, dates and confirmation code. Cancellation emails remove the stay.
-  1. Your Google account needs 2-Step Verification. Then create an **App password** at <https://myaccount.google.com/apppasswords>.
-  2. In `config.json`, set `gmail.enabled` to `true`, `address`, and `app_password`.
-  3. Run `python3 welcome_server.py import-gmail` once to test it, then restart the service. After that it checks every 15 minutes.
+**Connect your Airbnb calendar (once)**
 
-  If an email doesn't contain a readable checkout date, the stay is flagged **"check dates"** on the admin page. Any stay you edit by hand is never overwritten by Gmail.
+1. On airbnb.com, go to **Calendar** → pick the listing → **Availability** → **Connect calendars** (or **Sync calendars**) → **Export calendar**. Copy the link. It ends in `.ics`.
+2. Paste it into `config.json` as `airbnb_calendar.url`, then restart the service.
+   To test it right away, run `python3 welcome_server.py sync-airbnb`.
+
+**For each new booking:** it appears on the admin page as **Reserved – add name**, with a **See booking on Airbnb** link and the last 4 digits of the guest's phone. Tap the link to see who it is, tap **Add name** and type it in. You can also set a display name like "Sarah & Mike" and change any TV's message for that stay.
+
+* **If you forget to add a name**, the TVs still come on and show a friendly welcome without one, with the right checkout date.
+* **Date changes and cancellations** come through automatically. If a future booking disappears from Airbnb's calendar, it's removed here too. Names you've added are never overwritten.
+* **Stays booked outside Airbnb** (friends, family, direct bookings) can be added by hand with the **Add a stay** form.
+* **Deleting an Airbnb booking** on the admin page only lasts until the next sync, which brings it back. To change who's welcomed, edit the stay instead.
+
+The calendar link works like a password: anyone with it can see your booking dates, so don't share it.
 
 ## 3. Install the app on each TV (about 1 hour the first time)
 

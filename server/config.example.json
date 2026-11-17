@@ -52,11 +52,8 @@
     "poll_seconds": 15
   },
 
-  "gmail": {
-    "enabled": false,
-    "address": "you@gmail.com",
-    "app_password": "",
-    "poll_minutes": 15,
-    "days_back": 90
+  "airbnb_calendar": {
+    "url": "",
+    "poll_minutes": 30
   }
 }

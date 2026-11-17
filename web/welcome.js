@@ -90,7 +90,7 @@
     if (tv.accent) document.documentElement.style.setProperty("--accent", tv.accent);
 
     text("propertyName", p.name);
-    if (g) {
+    if (g && g.first_name) {
       text("eyebrow", "Welcome to " + p.name);
       text("greeting", "Hi, " + g.first_name + ".");
     } else {

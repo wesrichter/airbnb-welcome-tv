@@ -2,22 +2,17 @@
 """Airbnb welcome-screen server.
 
 Serves the welcome page + JSON for each TV, an admin page for guest bookings,
-optionally imports guests from Airbnb confirmation emails (Gmail over IMAP), and
+syncs bookings from your Airbnb calendar link, and
 optionally watches the SmartThings door lock and opens the welcome app on the TVs.
 
 Python 3.9+ standard library only.  Run:   python3 welcome_server.py
 Other commands:
     python3 welcome_server.py launch [tv-id ...]   # turn TVs on + open the app now
-    python3 welcome_server.py import-gmail         # one Gmail import pass, then exit
+    python3 welcome_server.py sync-airbnb          # one Airbnb calendar sync, then exit
     python3 welcome_server.py smartthings-auth     # one-time OAuth setup (see README)
 """
 import base64
 import datetime as dt
-import email
-import email.header
-import email.utils
-import html
-import imaplib
 import json
 import mimetypes
 import os
@@ -206,9 +201,10 @@ def welcome_payload(tv_id):
             "checkout": r["checkout"],
             "guest_count": r.get("guest_count"),
         }
-    msg = (r or {}).get("tv_messages", {}).get(tv_id) or tv.get("message", "")
-    if not r:
-        msg = tv.get("message_no_guest", p.get("message_no_guest", "")) or msg
+    named = bool(guest and guest["first_name"])
+    msg = (r or {}).get("tv_messages", {}).get(tv_id) or (tv.get("message", "") if named else "")
+    if not msg:  # no guest, or a booking whose name hasn't been added yet
+        msg = tv.get("message_no_guest", p.get("message_no_guest", ""))
     return {
         "tv": {"id": tv_id, "label": tv.get("label", tv_id), "message": fill(msg, values),
                "background": tv.get("background", ""), "accent": tv.get("accent", "")},
@@ -370,145 +366,111 @@ def smartthings_auth_cli():
         print(f"  {d['deviceId']}  {d.get('label') or d.get('name')}")
 
 
-# --------------------------------------------------------------------------- Gmail import
-MONTHS = {m: i for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
-DATE_RE = re.compile(
-    r"\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?",
-    re.I)
-SUBJECT_RE = re.compile(r"reservation confirmed\s*[-–—:]\s*(.+?)\s+arrives\s+(\w+)\s+(\d{1,2})", re.I)
+# --------------------------------------------------------------------------- Airbnb calendar sync
+# Airbnb's calendar export (iCal) has each booking's dates and confirmation code,
+# but not the guest's name. New bookings appear on the admin page as
+# "Reserved - add name", with a link to the booking on Airbnb.
 CODE_RE = re.compile(r"\b(HM[A-Z0-9]{8})\b")
 
 
-def _decode(s):
-    return "".join(
-        part.decode(enc or "utf-8", "replace") if isinstance(part, bytes) else part
-        for part, enc in email.header.decode_header(s or ""))
+def _ical_events(text):
+    """Minimal iCal parser: returns a list of {PROPERTY: value} dicts, one per VEVENT."""
+    lines = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw[:1] in (" ", "\t") and lines:
+            lines[-1] += raw[1:]  # folded continuation line
+        else:
+            lines.append(raw)
+    events, cur = [], None
+    for line in lines:
+        if line == "BEGIN:VEVENT":
+            cur = {}
+        elif line == "END:VEVENT" and cur is not None:
+            events.append(cur)
+            cur = None
+        elif cur is not None and ":" in line:
+            key, _, val = line.partition(":")
+            cur[key.split(";")[0].upper()] = val.replace("\\n", "\n").replace("\\,", ",").replace("\\;", ";")
+    return events
 
 
-def _body_text(msg):
-    texts = []
-    for part in msg.walk():
-        ctype = part.get_content_type()
-        if ctype in ("text/plain", "text/html") and not part.get_filename():
-            raw = part.get_payload(decode=True) or b""
-            t = raw.decode(part.get_content_charset() or "utf-8", "replace")
-            if ctype == "text/html":
-                t = html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(style|script).*?</\1>", " ", t)))
-            texts.append(t)
-    return re.sub(r"\s+", " ", " ".join(texts))
+def _ical_date(v):
+    v = (v or "").strip()[:8]
+    return dt.date(int(v[:4]), int(v[4:6]), int(v[6:8]))
 
 
-def _resolve_year(month, day, ref, explicit=None):
-    if explicit:
-        return dt.date(int(explicit), month, day)
-    best = None
-    for y in (ref.year - 1, ref.year, ref.year + 1):
+def parse_airbnb_ical(text):
+    if "BEGIN:VCALENDAR" not in text:
+        raise ValueError("That link didn't return an Airbnb calendar")
+    stays = []
+    for ev in _ical_events(text):
+        desc = ev.get("DESCRIPTION", "")
+        if ev.get("SUMMARY", "").strip().lower() != "reserved" and "reservation" not in desc.lower():
+            continue  # blocked dates ("Airbnb (Not available)") etc.
         try:
-            d = dt.date(y, month, day)
-        except ValueError:
+            ci, co = _ical_date(ev.get("DTSTART")), _ical_date(ev.get("DTEND"))
+        except (ValueError, TypeError):
             continue
-        # bookings are made before arrival; allow a little slack for late emails
-        if d >= ref - dt.timedelta(days=7) and (best is None or d < best):
-            best = d
-    return best
+        code = CODE_RE.search(desc)
+        url = re.search(r"https://\S*airbnb\.\S+", desc)
+        phone = re.search(r"Last 4 Digits\)?:\s*(\d{4})", desc)
+        stays.append({
+            "id": code.group(1) if code else "ical-" + (ev.get("UID") or f"{ci}-{co}")[:40],
+            "checkin": ci.isoformat(),
+            "checkout": co.isoformat(),
+            "airbnb_url": url.group(0) if url else "",
+            "phone_last4": phone.group(1) if phone else "",
+        })
+    return stays
 
 
-def parse_airbnb_email(subject, body, sent):
-    """Return a reservation dict, ('cancel', code), or None."""
-    code_m = CODE_RE.search(subject + " " + body)
-    code = code_m.group(1) if code_m else None
-    if re.search(r"cancel", subject, re.I) and code:
-        return ("cancel", code)
-    m = SUBJECT_RE.search(subject)
-    if not m:
-        return None
-    name = m.group(1).strip()
-    mon = MONTHS.get(m.group(2)[:3].lower())
-    if not mon:
-        return None
-    checkin = _resolve_year(mon, int(m.group(3)), sent)
-    checkout, review = None, False
-    for dm in DATE_RE.finditer(body):
-        d = _resolve_year(MONTHS[dm.group(1)[:3].lower()], int(dm.group(2)), checkin, dm.group(3))
-        if d and d > checkin:
-            checkout = d
-            break
-    if not checkout:
-        checkout, review = checkin + dt.timedelta(days=1), True
-    gm = re.search(r"(\d+)\s+(?:adults?|guests?)", body, re.I)
-    return {
-        "id": code or uuid.uuid4().hex[:10],
-        "guest_name": name,
-        "checkin": checkin.isoformat(),
-        "checkout": checkout.isoformat(),
-        "guest_count": int(gm.group(1)) if gm else None,
-        "source": "gmail",
-        "needs_review": review,
-    }
-
-
-def gmail_import_once():
-    g = CONFIG.get("gmail", {})
-    if not (g.get("address") and g.get("app_password")):
-        raise RuntimeError("gmail.address and gmail.app_password are not set")
-    since = (dt.date.today() - dt.timedelta(days=int(g.get("days_back", 90)))).strftime("%d-%b-%Y")
-    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+def airbnb_sync_once():
+    url = CONFIG.get("airbnb_calendar", {}).get("url")
+    if not url:
+        raise RuntimeError("airbnb_calendar.url is not set in config.json")
+    req = urllib.request.Request(url, headers={"User-Agent": "WelcomeTV/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        stays = parse_airbnb_ical(r.read().decode("utf-8", "replace"))
+    today = now_local().date().isoformat()
     added = updated = removed = 0
-    try:
-        imap.login(g["address"], g["app_password"].replace(" ", ""))
-        imap.select('"[Gmail]/All Mail"', readonly=True)
-        typ, data = imap.search(None, "SINCE", since, "FROM", '"airbnb.com"')
-        ids = data[0].split() if typ == "OK" else []
-        found = []
-        for mid in ids:
-            typ, md = imap.fetch(mid, "(RFC822)")
-            if typ != "OK":
-                continue
-            msg = email.message_from_bytes(md[0][1])
-            subject = _decode(msg.get("Subject"))
-            if not re.search(r"reservation confirmed|cancel", subject, re.I):
-                continue
-            sent = email.utils.parsedate_to_datetime(msg.get("Date")).date()
-            parsed = parse_airbnb_email(subject, _body_text(msg), sent)
-            if parsed:
-                found.append((sent, parsed))
-    finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
     with _lock:
         items = reservations()
         by_id = {r["id"]: r for r in items}
-        for _, p in sorted(found, key=lambda x: x[0]):  # oldest first, so later changes win
-            if isinstance(p, tuple):
-                if p[1] in by_id and by_id[p[1]].get("source") == "gmail":
-                    del by_id[p[1]]
-                    removed += 1
-                continue
-            old = by_id.get(p["id"])
+        seen = set()
+        for s in stays:
+            seen.add(s["id"])
+            old = by_id.get(s["id"])
             if old is None:
-                by_id[p["id"]] = p
+                by_id[s["id"]] = dict(s, guest_name="", source="airbnb")
                 added += 1
-            elif old.get("source") == "gmail" and not old.get("edited"):
-                old.update({k: v for k, v in p.items() if v is not None})
-                updated += 1
+            else:
+                changed = {k: v for k, v in s.items() if v and old.get(k) != v}
+                if changed:
+                    old.update(changed)
+                    updated += 1
+        # A synced stay that is still in the future but no longer in the feed was cancelled.
+        # (Past stays drop off the feed naturally, so they're kept.)
+        # Skip this if the feed came back empty, so a glitch on Airbnb's side can't wipe the list.
+        for rid, r in list(by_id.items()) if stays else []:
+            if r.get("source") == "airbnb" and rid not in seen and r.get("checkin", "") > today:
+                del by_id[rid]
+                removed += 1
         save_reservations(list(by_id.values()))
-    log(f"gmail import: {added} added, {updated} updated, {removed} cancelled")
+    update_state(airbnb_last_sync=now_local().isoformat(timespec="minutes"))
+    log(f"airbnb sync: {added} new, {updated} changed, {removed} cancelled")
     return {"added": added, "updated": updated, "removed": removed}
 
 
-def gmail_loop():
-    g = CONFIG.get("gmail", {})
-    if not g.get("enabled"):
+def airbnb_sync_loop():
+    cal = CONFIG.get("airbnb_calendar", {})
+    if not cal.get("url"):
         return
     while True:
         try:
-            gmail_import_once()
+            airbnb_sync_once()
         except Exception as e:
-            log("gmail import failed:", e)
-        time.sleep(max(5, int(g.get("poll_minutes", 15))) * 60)
+            log("airbnb sync failed:", e)
+        time.sleep(max(10, int(cal.get("poll_minutes", 30))) * 60)
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -586,7 +548,8 @@ class Handler(BaseHTTPRequestHandler):
                     "reservations": reservations(),
                     "current": (current_reservation() or {}).get("id"),
                     "tvs": [{"id": k, "label": v.get("label", k)} for k, v in CONFIG.get("tvs", {}).items()],
-                    "gmail_enabled": bool(CONFIG.get("gmail", {}).get("enabled")),
+                    "airbnb_sync_enabled": bool(CONFIG.get("airbnb_calendar", {}).get("url")),
+                    "airbnb_last_sync": state().get("airbnb_last_sync"),
                     "smartthings_enabled": bool(CONFIG.get("smartthings", {}).get("token")
                                                 or CONFIG.get("smartthings", {}).get("client_id")),
                 })
@@ -623,8 +586,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True})
             if u.path == "/api/admin/launch":
                 return self.send_json({"results": launch_all(body.get("tvs") or None)})
-            if u.path == "/api/admin/import-gmail":
-                return self.send_json(gmail_import_once())
+            if u.path == "/api/admin/sync-airbnb":
+                return self.send_json(airbnb_sync_once())
         except Exception as e:
             traceback.print_exc()
             return self.send_json({"error": str(e)}, 500)
@@ -639,13 +602,13 @@ def main():
     if cmd == "launch":
         print("\n".join(launch_all(sys.argv[2:] or None)))
         return
-    if cmd == "import-gmail":
-        print(gmail_import_once())
+    if cmd == "sync-airbnb":
+        print(airbnb_sync_once())
         return
     if cmd == "smartthings-auth":
         smartthings_auth_cli()
         return
-    for target in (gmail_loop, lock_watcher):
+    for target in (airbnb_sync_loop, lock_watcher):
         threading.Thread(target=target, daemon=True).start()
     port = int(CONFIG.get("port", 8080))
     log(f"Welcome server on http://0.0.0.0:{port}   admin: http://<this-computer-ip>:{port}/admin")
